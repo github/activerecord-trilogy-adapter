@@ -27,6 +27,32 @@ class ActiveRecord::ConnectionAdapters::TrilogyAdapterTest < TestCase
     @adapter.disconnect!
   end
 
+  test ".new_client" do
+    client = @adapter.class.new_client(@configuration)
+    assert_equal Trilogy, client.class
+  end
+
+  test ".new_client on db error" do
+    configuration = @configuration.merge(database: "unknown")
+    assert_raises ActiveRecord::NoDatabaseError do
+      @adapter.class.new_client(configuration)
+    end
+  end
+
+  test ".new_client on access denied error" do
+    configuration = @configuration.merge(username: "unknown")
+    assert_raises ActiveRecord::DatabaseConnectionError do
+      @adapter.class.new_client(configuration)
+    end
+  end
+
+  test ".new_client on host error" do
+    configuration = @configuration.merge(host: "unknown")
+    assert_raises ActiveRecord::DatabaseConnectionError do
+      @adapter.class.new_client(configuration)
+    end
+  end
+
   test "#explain for one query" do
     explain = @adapter.explain("select * from posts")
     assert_match %(possible_keys), explain
@@ -121,7 +147,7 @@ class ActiveRecord::ConnectionAdapters::TrilogyAdapterTest < TestCase
   end
 
   test "#active? answers false with connection and exception" do
-    @adapter.send(:connection).stub(:ping, -> { raise Trilogy::Error.new }) do
+    @adapter.send(:connection).stub(:ping, -> { raise Trilogy::BaseError.new }) do
       assert_equal false, @adapter.active?
     end
   end
@@ -147,11 +173,11 @@ class ActiveRecord::ConnectionAdapters::TrilogyAdapterTest < TestCase
     adapter = trilogy_adapter_with_connection(old_connection)
 
     begin
-      Trilogy.stub(:new, -> _ { raise Trilogy::Error.new }) do
+      Trilogy.stub(:new, -> _ { raise Trilogy::BaseError.new }) do
         adapter.reconnect!
       end
     rescue ActiveRecord::StatementInvalid => ex
-      assert_instance_of Trilogy::Error, ex.cause
+      assert_instance_of Trilogy::BaseError, ex.cause
     else
       flunk "Expected Trilogy::Error to be raised"
     end
@@ -381,7 +407,7 @@ class ActiveRecord::ConnectionAdapters::TrilogyAdapterTest < TestCase
 
     # Cause an ER_SERVER_SHUTDOWN error (code 1053) after the session is
     # set. On reconnect, the adapter will get a real, working connection.
-    server_shutdown_error = Trilogy::DatabaseError.new
+    server_shutdown_error = Trilogy::ProtocolError.new
     server_shutdown_error.instance_variable_set(:@error_code, 1053)
     mock_connection.expect(:query, nil) { raise server_shutdown_error }
 
@@ -558,7 +584,7 @@ class ActiveRecord::ConnectionAdapters::TrilogyAdapterTest < TestCase
   test "#execute fails with unknown error" do
     assert_raises_with_message(ActiveRecord::StatementInvalid, /A random error/) do
       connection = Minitest::Mock.new Trilogy.new(@configuration)
-      connection.expect(:query, nil) { raise Trilogy::DatabaseError, "A random error." }
+      connection.expect(:query, nil) { raise Trilogy::ProtocolError, "A random error." }
       adapter = trilogy_adapter_with_connection(connection)
 
       adapter.execute "SELECT * FROM posts;"
